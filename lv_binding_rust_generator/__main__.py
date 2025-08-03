@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import fire
@@ -229,7 +230,7 @@ def generate_rs_file(file: Path) -> str:
 def get_rs_file_path(output_dir: Path, file: Path) -> Path:
     return output_dir / file.parent / f"{file.stem}.rs"
 
-def generate(lvgl_src_dir: str, output_dir: str = "binding", excluded: List[str] = []):
+def generate(lvgl_src_dir: str, output_dir: str = "out", excluded: List[str] = []):
     root = T.pipe(
         lvgl_src_dir,
         Path,
@@ -247,11 +248,23 @@ def generate(lvgl_src_dir: str, output_dir: str = "binding", excluded: List[str]
             if not content.strip():
                 continue
             
-            outfile = get_rs_file_path(Path(output_dir), file.relative_to(root))
+            outfile = get_rs_file_path(Path(output_dir) / "lvgl", file.relative_to(root))
             outfile.parent.mkdir(parents=True, exist_ok=True)
             with open(outfile, "w") as fd:
                 fd.write(content)
 
+    build_rust_crate(Path(output_dir) / "lvgl")
+
+def build_rust_crate(root_dir: Path):
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        with open(f"{dirpath}.rs", "w") as fd:
+            T.pipe(
+                T.concatv(dirnames, T.map(lambda f: f.strip(".rs"), filenames)),
+                T.map(lambda mod: f"pub mod {mod};"),
+                '\n'.join,
+                fd.write,
+            )
+            
 def main():
     fire.Fire(generate)
 
