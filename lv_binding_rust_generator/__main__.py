@@ -1,35 +1,11 @@
+import re
+import shutil
 import fire
-import regex
 import toolz.curried as T
 from pathlib import Path
 from typing import List, Generator
 
 from pprint import pprint
-
-params_pattern = regex.compile(r'(?:const\s+)?(?P<param_type>(?:unsigned\s+|signed\s+)?(?:\w+\s*\*?\s*)+?)\s+(?P<param_name>\w+)')
-function_pattern = regex.compile(r"""
-    ^
-    (?=[a-zA-Z])
-    (?:const\s+)?
-    (?P<return_type>[\w\s\*]+?)
-    \s+
-    (?P<func_name>\w+)
-    \s*
-    \(
-        \s*
-        (?P<params>
-            void
-            |
-            (?:
-                (?:const\s+)?[\w\s\*]+?\s+\w+\s*(?:,\s*|)*
-            )*
-            |
-            \s*
-        )
-    \)
-    \s*;
-    \s*$
-    """, regex.VERBOSE)
 
 native_type_map = {
     "char": "c_char",
@@ -57,117 +33,184 @@ native_type_map = {
     "void": "c_void",
 }
 
+line_comment_pattern = re.compile(r'//.*')
+def remove_line_comments(code: str) -> str:
+    return line_comment_pattern.sub('', code)
+
+block_comment_pattern = re.compile(r'/\*.*?\*/', re.DOTALL)
+def remove_block_comments(code: str) -> str:
+    # pattern = re.compile(
+    #     r'//.*?$|/\*.*?\*/',
+    #     re.DOTALL | re.MULTILINE
+    # )
+    return block_comment_pattern.sub('', code)
+
+preprocessor_line_pattern = re.compile(r'^\s*#.*$', re.MULTILINE)
+def remove_preprocessor_lines(code: str) -> str:
+    return preprocessor_line_pattern.sub('', code)
+
+empty_line_pattern = re.compile(r'^\s*\n', re.MULTILINE)
+def remove_empty_lines(code: str) -> str:
+    return empty_line_pattern.sub('', code)
+
+const_pattern = re.compile(r'\bconst\b\s*')
+def remove_all_const(code: str) -> str:
+    return const_pattern.sub('', code)
+
+def flatten_function_signatures(code: str) -> str:
+    lines = code.splitlines()
+    result = []
+    buffer = []
+    in_signature = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_signature:
+            if re.search(r'\w+\s*\(', stripped) and not stripped.endswith(';') and not ')' in stripped:
+                buffer = [stripped]
+                in_signature = True
+            else:
+                result.append(line)
+        else:
+            buffer.append(stripped)
+            if ')' in stripped and stripped.endswith(';'):
+                combined = ' '.join(buffer)
+                result.append(combined)
+                buffer = []
+                in_signature = False
+
+    if buffer:
+        result.append(' '.join(buffer))
+
+    return '\n'.join(result)
+
+static_line_pattern = re.compile(r'^.*\bstatic\b.*$\n?', re.MULTILINE)
+def remove_static_lines(code: str) -> str:
+    return static_line_pattern.sub('', code)
+
+ellipsis_line_pattern = re.compile(r'^.*\.\.\..*$\n?', re.MULTILINE)
+def remove_ellipsis_lines(code: str) -> str:
+    return ellipsis_line_pattern.sub('', code)
+
+# def remove_brace_blocks(code: str) -> str:
+#     pattern = r'\{(?:[^{}]*|(?R))*\}'
+#     return regex.sub(pattern, '', code)
+
+typedef_line_pattern = re.compile(r'^\s*typedef\b.*?;\s*$', re.MULTILINE)
+def extract_typedef_lines(code: str) -> List[str]:
+    return typedef_line_pattern.findall(code)
+def remove_typedef_lines(code: str) -> str:
+    return typedef_line_pattern.sub('', code)
+
+def preproces_code(code: str) -> str:
+    code = T.pipe(
+        code,
+        remove_line_comments,
+        remove_block_comments,
+        remove_preprocessor_lines,
+        remove_empty_lines,
+        remove_all_const,
+        flatten_function_signatures,
+        remove_static_lines,
+        remove_ellipsis_lines,
+    )
+
+    typedef_lines = extract_typedef_lines(code)
+    code = remove_typedef_lines(code)
+
+    return code, typedef_lines
+
 def find_h_files(directory: Path, excluded: List[str]) -> Generator[str, None, None]:
     yield from directory.rglob("*.h")
 
-def remove_c_comments(code: str) -> str:
-    pattern = regex.compile(
-        r'//.*?$|/\*.*?\*/',
-        regex.DOTALL | regex.MULTILINE
-    )
-    return regex.sub(pattern, '', code)
-
-def remove_brace_blocks(code: str) -> str:
-    pattern = r'\{(?:[^{}]*|(?R))*\}'
-    return regex.sub(pattern, '', code)
-
-def parse_h_files(file: Path):
-    with open(file, "r") as fd:
-        def parse_params(params: str):
-            return T.pipe(
-                params.split(","),
-                T.map(lambda s: s.strip()),
-                T.map(params_pattern.match),
-                T.filter(bool),
-                T.map(lambda m: m.groupdict()),
-                list,
-            )
-
+params_pattern = re.compile(r'^\s*(?P<type>.+?)(?P<name>\w+)(?P<array>(?:\s*\[\s*\])*)\s*$')
+function_pattern = re.compile(r'^(?P<type>\w[\w\s\*\d]+?)\s*(?P<array>\[\s*\d*\s*\])?\s+(?P<name>\w+)\s*\((?P<params>.*?)\)\s*(?P<suffix>(?:\w+\([^)]*\))*)\s*;\s*$', re.MULTILINE)
+def parse_h_files(code: str) -> List[str]:
+    def parse_params(params: str):
+        if params.strip() == "void":
+            return []
+        
         return T.pipe(
-            fd.read(),
-            remove_c_comments,
-            remove_brace_blocks,
-            lambda code: code.splitlines(),
-            T.filter(bool),
-            T.map(function_pattern.match),
-            T.filter(bool),
+            params.split(","),
+            T.map(lambda s: s.strip()),
+            T.map(params_pattern.match),
             T.map(lambda m: m.groupdict()),
-            T.map(lambda f: {
-                **f,
-                "params": parse_params(f["params"]),
-            }),
+            T.map(T.valmap(lambda s: s.strip())),
             list,
         )
+
+    return T.pipe(
+        code.splitlines(),
+        T.map(function_pattern.match),
+        T.filter(bool),
+        T.map(lambda m: m.groupdict()),
+        T.map(lambda f: {
+            **f,
+            "params": parse_params(f["params"]),
+        }),
+        list,
+    )
+
+@T.curry
+def convert_type(typedef_set, info: dict) -> dict:
+    ptr = False
+    if info["type"].endswith("*"):
+        ptr = True
+        info["type"] = info["type"].strip("*").strip()
+    elif info["array"] and info["array"].strip():
+        ptr = True
+
+    if info["type"] in native_type_map:
+        info["type"] = f"{native_type_map[info["type"]]}"
+    elif ptr:
+        typedef_set.add(info["type"])
+
+    info["mut"] = "*mut " if ptr else ""
+    return info
     
 @T.curry
-def convert_params(param_type_set, params: List[dict]) -> str:
-    ptr_pattern = regex.compile(r'(\w+)\s*\*')
-
-    def convert_param(param: dict) -> str:
-        if ptr_pattern.match(param["param_type"]):
-            param['param_type'] = param['param_type'].replace('*', '').strip()
-
-            if param['param_type'] in native_type_map:
-                param['param_type'] = f"{native_type_map[param['param_type']]}"
-            else:
-                param_type_set.add(param['param_type'])
-
-            return f"{param['param_name']}: *mut {param['param_type']}"
-        else:
-            if param['param_type'] in native_type_map:
-                param['param_type'] = f"{native_type_map[param['param_type']]}"
-                
-            return f"{param['param_name']}: {param['param_type']}"
-        
+def convert_params(typedef_set, params: List[dict]) -> str:
     return T.pipe(
         params,
-        T.map(convert_param),
+        T.map(convert_type(typedef_set)),
+        T.map(lambda param: f"{param['name']}: {param['mut']}{param['type']}"),
         ', '.join,
     )
 
 @T.curry
-def convert_return_type(param_type_set, return_type: str) -> str:
-    if return_type == "void":
+def convert_return_type(typedef_set, info: dict) -> str:
+    if info["type"] == "void" and (not info["array"] or not info["array"].strip()):
         return "()"
     
-    ptr_pattern = regex.compile(r'(\w+)\s*\*')
-
-    if ptr_pattern.match(return_type):
-        return_type = return_type.replace('*', '').strip()
-
-        if return_type in native_type_map:
-            return_type = f"{native_type_map[return_type]}"
-        else:
-            param_type_set.add(return_type)
-
-        return f"*mut {return_type}"
-    else:
-        if return_type in native_type_map:
-            return_type = f"{native_type_map[return_type]}"
-
-        return f"{return_type}"
+    info = convert_type(typedef_set, info)
     
-def convert_h_file(file: Path) -> str:
-    param_type_set = set()
-    _convert_return_type = convert_return_type(param_type_set)
-    _convert_params = convert_params(param_type_set)
+    return f"{info['mut']}{info['type']}"
+    
+def generate_rs_file(file: Path) -> str:
+    with open(file, "r") as fd:
+        code, typedef_lines = preproces_code(fd.read())
+
+    typedef_set = set()
+    _convert_return_type = convert_return_type(typedef_set)
+    _convert_params = convert_params(typedef_set)
 
     content_extern = T.pipe(
-        file,
+        code,
         parse_h_files,
         T.map(lambda f: {
             **f,
-            "return_type": _convert_return_type(f["return_type"]),
             "params": _convert_params(f["params"]),
+            "type": _convert_return_type(f),
         }),
-        T.map(lambda f: f"pub fn {f['func_name']}({f['params']}) -> {f['return_type']};"),
+        T.map(lambda f: f"pub fn {f['name']}({f['params']}) -> {f['type']};"),
         T.map(lambda l: f"    {l}"),
         '\n'.join,
         lambda s: f'extern "C" {{\n{s}\n}}' if s else "",
     )
 
     content_typedef = T.pipe(
-        param_type_set,
+        typedef_set,
         T.map(lambda t: f"pub type {t} = c_void;"),
         '\n'.join,
     )
@@ -186,32 +229,31 @@ def convert_h_file(file: Path) -> str:
 def get_rs_file_path(output_dir: Path, file: Path) -> Path:
     return output_dir / file.parent / f"{file.stem}.rs"
 
-def gen(lvgl_src_dir: str, output_dir: str = "binding", excluded: List[str] = []):
+def generate(lvgl_src_dir: str, output_dir: str = "binding", excluded: List[str] = []):
     root = T.pipe(
         lvgl_src_dir,
         Path,
         lambda path: path / "src",
     )
 
+    shutil.rmtree(output_dir, ignore_errors=True)
+
     for file in find_h_files(root, excluded):
-        print(file)
-
-        outfile = get_rs_file_path(Path(output_dir), file.relative_to(root))
-
         try:
-            content = convert_h_file(file)
+            content = generate_rs_file(file)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error {file}: {e}")
         else:
             if not content.strip():
                 continue
             
+            outfile = get_rs_file_path(Path(output_dir), file.relative_to(root))
             outfile.parent.mkdir(parents=True, exist_ok=True)
             with open(outfile, "w") as fd:
                 fd.write(content)
 
 def main():
-    fire.Fire(gen)
+    fire.Fire(generate)
 
 if __name__ == "__main__":
     main()
