@@ -211,7 +211,7 @@ def generate_rs_file(file: Path) -> str:
 
     content_typedef = T.pipe(
         typedef_set,
-        T.map(lambda t: f"pub type {t} = c_void;"),
+        T.map(lambda t: f"#[allow(non_camel_case_types)]\npub type {t} = c_void;"),
         '\n'.join,
     )
 
