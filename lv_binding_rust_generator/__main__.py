@@ -295,6 +295,11 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
 
     return enum_name, result
     
+def convert_typedef(code: str) -> str:
+    m = re.match(r'^\s*typedef\s+([a-zA-Z_][a-zA-Z0-9_<>]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;', code)
+    if m:
+        return f"pub type {m.group(2)} = {m.group(1)};"
+
 def generate_rs_file(file: Path) -> str:
     with open(file, "r") as fd:
         code, lvgl_includes, typedef_lines, enum_blocks = preproces_code(fd.read())
@@ -318,8 +323,16 @@ def generate_rs_file(file: Path) -> str:
     )
 
     content_typedef = T.pipe(
-        typedef_set,
-        T.map(lambda t: f"pub type {t} = c_void;"),
+        T.concatv(
+            T.pipe(
+                typedef_set,
+                T.map(lambda t: f"pub type {t} = c_void;"),
+            ),
+            T.pipe(
+                typedef_lines,
+                T.map(convert_typedef),
+            ),
+        ),
         '\n'.join,
     )
 
