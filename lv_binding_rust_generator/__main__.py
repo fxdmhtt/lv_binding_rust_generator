@@ -152,7 +152,7 @@ def preproces_code(code: str) -> str:
 def find_h_files(directory: Path, excluded: List[str]) -> Generator[str, None, None]:
     yield from directory.rglob("*.h")
 
-params_pattern = re.compile(r'^\s*(?P<type>.+?)(?P<name>\w+)(?P<array>(?:\s*\[\s*\])*)\s*$')
+param_pattern = re.compile(r'^\s*(?P<type>.+?)(?P<name>\w+)(?P<array>(?:\s*\[\s*\])*)\s*$')
 function_pattern = re.compile(r'^(?P<type>\w[\w\s\*\d]+?)\s*(?P<array>\[\s*\d*\s*\])?\s+(?P<name>\w+)\s*\((?P<params>.*?)\)\s*(?P<suffix>(?:\w+\([^)]*\))*)\s*;\s*$', re.MULTILINE)
 def parse_h_files(code: str) -> List[str]:
     def parse_params(params: str):
@@ -162,7 +162,7 @@ def parse_h_files(code: str) -> List[str]:
         return T.pipe(
             params.split(","),
             T.map(lambda s: s.strip()),
-            T.map(params_pattern.match),
+            T.map(param_pattern.match),
             T.map(lambda m: m.groupdict()),
             T.map(T.valmap(lambda s: s.strip())),
             list,
@@ -211,7 +211,7 @@ def convert_params(typedef_set, params: List[dict]) -> str:
         params,
         T.map(convert_type(typedef_set)),
         T.map(lambda param: {**param, "name": param["name"] if param["name"] not in ["fn", "type"] else f"r#{param['name']}"}),
-        T.map(lambda param: f"{param['name']}: {param['mut']}{param['type']}"),
+        T.map(lambda param: f"{param['name']}{': ' if param['name'] else ''}{param['mut']}{param['type']}"),
         ', '.join,
     )
 
@@ -296,9 +296,45 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
     return enum_name, result
     
 def convert_typedef(code: str) -> str:
-    m = re.match(r'^\s*typedef\s+([a-zA-Z_][a-zA-Z0-9_<>]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;', code)
-    if m:
-        return f"pub type {m.group(2)} = {m.group(1)};"
+    code = code.replace("struct ", "").strip()
+    code = code.replace("enum ", "").strip()
+
+    try:
+        m = re.match(r'^\s*typedef\s+([a-zA-Z_][a-zA-Z0-9_<>]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;', code)
+        if m:
+            return f"pub type {m.group(2)} = {m.group(1)};"
+        
+        m = re.match(r'^\s*typedef\s+(?P<type>.+?)\s*\(\*(?P<name>\w+)\)\s*\((?P<params>.*)\)\s*;', code)
+        if m:
+            f = m.groupdict()
+                
+            param_pattern = re.compile(r'^\s*(?P<type>.+?)(?:\s+(?P<name>\w+))?(?P<array>(?:\s*\[\s*\])*)\s*$')
+
+            def parse_params(params: str):
+                if params.strip() == "void":
+                    return []
+                
+                return T.pipe(
+                    params.split(","),
+                    T.map(lambda s: s.strip()),
+                    T.map(param_pattern.match),
+                    T.map(lambda m: m.groupdict()),
+                    T.map(T.valmap(lambda s: s.strip() if isinstance(s, str) else "")),
+                    list,
+                )
+            
+            f["params"] = parse_params(f["params"])
+
+            typedef_set = set()
+            f["params"] = convert_params(typedef_set, f["params"])
+
+            f["array"] = ""
+            f["type"] = convert_return_type(typedef_set, f)
+
+            return f"pub type {f['name']} = Option<unsafe extern \"C\" fn({f['params']}) -> {f['type']}>;"
+    except Exception as e:
+        print(f"Error parsing typedef: {code}")
+        return ""
 
 def generate_rs_file(file: Path) -> str:
     with open(file, "r") as fd:
@@ -331,6 +367,7 @@ def generate_rs_file(file: Path) -> str:
             T.pipe(
                 typedef_lines,
                 T.map(convert_typedef),
+                T.filter(None),
             ),
         ),
         '\n'.join,
