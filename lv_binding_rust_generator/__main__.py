@@ -185,6 +185,7 @@ def parse_h_files(code: str) -> List[str]:
 def convert_type(typedef_set, info: dict) -> dict:
     info["type"] = info["type"].replace("struct ", "").strip()
     info["type"] = info["type"].replace("enum ", "").strip()
+    info["type"] = info["type"].replace("union ", "").strip()
 
     ptr = False
     if info["type"].endswith("*"):
@@ -295,14 +296,19 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
 
     return enum_name, result
     
-def convert_typedef(code: str) -> str:
+@T.curry
+def convert_typedef(typedef_set, code: str) -> str:
     code = code.replace("struct ", "").strip()
     code = code.replace("enum ", "").strip()
+    code = code.replace("union ", "").strip()
 
     try:
         m = re.match(r'^\s*typedef\s+([a-zA-Z_][a-zA-Z0-9_<>]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;', code)
         if m:
-            return f"pub type {m.group(2)} = {m.group(1)};"
+            old_type, new_type = m.groups()
+            if old_type in native_type_map:
+                old_type = f"{native_type_map[old_type]}"
+            return f"pub type {new_type} = {old_type};"
         
         m = re.match(r'^\s*typedef\s+(?P<type>.+?)\s*\(\*(?P<name>\w+)\)\s*\((?P<params>.*)\)\s*;', code)
         if m:
@@ -325,7 +331,6 @@ def convert_typedef(code: str) -> str:
             
             f["params"] = parse_params(f["params"])
 
-            typedef_set = set()
             f["params"] = convert_params(typedef_set, f["params"])
 
             f["array"] = ""
@@ -343,6 +348,7 @@ def generate_rs_file(file: Path) -> str:
     typedef_set = set()
     _convert_return_type = convert_return_type(typedef_set)
     _convert_params = convert_params(typedef_set)
+    _convert_typedef = convert_typedef(typedef_set)
 
     content_extern_C = T.pipe(
         code,
@@ -366,7 +372,7 @@ def generate_rs_file(file: Path) -> str:
             ),
             T.pipe(
                 typedef_lines,
-                T.map(convert_typedef),
+                T.map(_convert_typedef),
                 T.filter(None),
             ),
         ),
@@ -379,7 +385,7 @@ def generate_rs_file(file: Path) -> str:
         T.filter(lambda e: e[1]),
         T.map(apply(lambda name, entry: T.pipe(
             entry,
-            T.map(apply(lambda e, v: f"pub const {e}: {name} = {v};")),
+            T.map(apply(lambda e, v: f"pub const {e}: {name if name else "u32"} = {v};")),
             '\n'.join,
             lambda items: f"pub type {name} = u32;\n\n{items}" if name else items,
         ))),
