@@ -290,16 +290,11 @@ def generate_rs_file(file: Path) -> str:
     content_enums = T.pipe(
         enum_blocks,
         T.map(convert_enum_block),
-        # T.map(apply(lambda name, entry: T.pipe(
-        #     entry,
-        #     T.map(apply(lambda e, v: f"{indent}{e} = {v},")),
-        #     '\n'.join,
-        #     lambda body: f"#[repr(C)]\npub enum {name} {{\n{body}\n}}",
-        # ))),
         T.map(apply(lambda name, entry: T.pipe(
             entry,
             T.map(apply(lambda e, v: f"pub const {e}: u32 = {v};")),
             '\n'.join,
+            lambda items: f"pub type {name} = u32;\n\n{items}",
         ))),
         '\n\n'.join,
     )
