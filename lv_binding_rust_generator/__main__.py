@@ -316,9 +316,10 @@ def generate_rs_file(file: Path) -> str:
         T.map(lambda p: T.pipe(
             p.removesuffix(".h"),
             lambda p: p.split("/"),
+            lambda ss: [] if "lv_conf_internal" in ss else ss,
             T.map(lambda s: s.replace("..", "super")),
             "::".join,
-            lambda p: f"pub use super::{p}::*;",
+            lambda p: f"pub use super::{p}::*;" if p else "",
         )),
         '\n'.join,
     )
@@ -350,14 +351,14 @@ def generate(lvgl_src_dir: str, output_dir: str = "out", excluded: List[str] = [
     shutil.rmtree(output_dir, ignore_errors=True)
 
     for file in find_h_files(root, excluded):
-        try:
-            content = generate_rs_file(file)
-        except Exception as e:
-            print(f"Error {file}: {e}")
-        else:
-            outfile = get_rs_file_path(Path(output_dir) / "lvgl", file.relative_to(root))
-            outfile.parent.mkdir(parents=True, exist_ok=True)
-            with open(outfile, "w") as fd:
+        outfile = get_rs_file_path(Path(output_dir) / "lvgl", file.relative_to(root))
+        outfile.parent.mkdir(parents=True, exist_ok=True)
+        with open(outfile, "w") as fd:
+            try:
+                content = generate_rs_file(file)
+            except Exception as e:
+                print(f"Error {file}: {e}")
+            else:
                 fd.write(content)
 
     build_rust_crate(Path(output_dir) / "lvgl")
