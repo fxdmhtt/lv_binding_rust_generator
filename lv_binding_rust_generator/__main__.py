@@ -240,7 +240,7 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
     entries = [e.strip() for e in enum_body.split(',')]
 
     def try_eval_enum_expr(expr, last_value):
-        if expr.strip() == "" and last_value:
+        if expr.strip() == "" and last_value is not None:
             return last_value + 1
         
         try:
@@ -317,6 +317,7 @@ def generate_rs_file(file: Path) -> str:
     content_enums = T.pipe(
         enum_blocks,
         T.map(convert_enum_block),
+        T.filter(lambda e: e[1]),
         T.map(apply(lambda name, entry: T.pipe(
             entry,
             T.map(apply(lambda e, v: f"pub const {e}: u32 = {v};")),
