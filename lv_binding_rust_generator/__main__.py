@@ -202,6 +202,7 @@ def convert_params(typedef_set, params: List[dict]) -> str:
     return T.pipe(
         params,
         T.map(convert_type(typedef_set)),
+        T.map(lambda param: {**param, "name": param["name"] if param["name"] not in ["fn", "type"] else f"r#{param['name']}"}),
         T.map(lambda param: f"{param['name']}: {param['mut']}{param['type']}"),
         ', '.join,
     )
