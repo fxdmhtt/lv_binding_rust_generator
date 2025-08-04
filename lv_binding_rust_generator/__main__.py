@@ -9,7 +9,7 @@ from functools import wraps
 
 from pprint import pprint
 
-intent = "    "
+indent = " " * 4
 
 native_type_map = {
     "char": "c_char",
@@ -276,7 +276,7 @@ def generate_rs_file(file: Path) -> str:
             "type": _convert_return_type(f),
         }),
         T.map(lambda f: f"pub fn {f['name']}({f['params']}) -> {f['type']};"),
-        T.map(lambda l: f"{intent}{l}"),
+        T.map(lambda l: f"{indent}{l}"),
         '\n'.join,
         lambda s: f'extern "C" {{\n{s}\n}}' if s else "",
     )
@@ -292,7 +292,7 @@ def generate_rs_file(file: Path) -> str:
         T.map(convert_enum_block),
         T.map(apply(lambda name, entry: T.pipe(
             entry,
-            T.map(apply(lambda e, v: f"{intent}{intent}{e} = {v},")),
+            T.map(apply(lambda e, v: f"{indent}{e} = {v},")),
             '\n'.join,
             lambda body: f"#[repr(C)]\npub enum {name} {{\n{body}\n}}",
         ))),
