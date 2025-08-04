@@ -259,7 +259,7 @@ def build_rust_crate(root_dir: Path):
     for dirpath, dirnames, filenames in os.walk(root_dir):
         with open(f"{dirpath}.rs", "w") as fd:
             T.pipe(
-                T.concatv(dirnames, T.map(lambda f: f.strip(".rs"), filenames)),
+                T.concatv(dirnames, T.map(lambda f: f[:-3], filenames)),
                 T.map(lambda mod: f"pub mod {mod};"),
                 '\n'.join,
                 fd.write,
