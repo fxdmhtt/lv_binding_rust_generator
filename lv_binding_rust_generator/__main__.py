@@ -178,6 +178,7 @@ def parse_h_files(code: str) -> List[str]:
 @T.curry
 def convert_type(typedef_set, info: dict) -> dict:
     info["type"] = info["type"].replace("struct ", "").strip()
+    info["type"] = info["type"].replace("enum ", "").strip()
     clean_type = re.sub(r'\b[A-Z0-9_]{2,}\b', '', info["type"]).strip()
     if clean_type:
         info["type"] = clean_type
@@ -321,7 +322,7 @@ def generate_rs_file(file: Path) -> str:
         T.filter(lambda e: e[1]),
         T.map(apply(lambda name, entry: T.pipe(
             entry,
-            T.map(apply(lambda e, v: f"pub const {e}: u32 = {v};")),
+            T.map(apply(lambda e, v: f"pub const {e}: {name} = {v};")),
             '\n'.join,
             lambda items: f"pub type {name} = u32;\n\n{items}" if name else items,
         ))),
