@@ -220,9 +220,9 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
         return "", []
 
     info = matches.groupdict()
-    body = info["enum_body"]
-    name = info["name_tail"] or info["name_head"]
-    entries = [e.strip() for e in body.split(',')]
+    enum_body = info["enum_body"]
+    enum_name = info["name_tail"] or info["name_head"]
+    entries = [e.strip() for e in enum_body.split(',')]
 
     def eval_enum_expr(expr, last_value):
         try:
@@ -257,7 +257,7 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
         result.append((name, value))
         last_value = value
 
-    return name, result
+    return enum_name, result
     
 def generate_rs_file(file: Path) -> str:
     with open(file, "r") as fd:
