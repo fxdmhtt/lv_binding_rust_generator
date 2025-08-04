@@ -178,6 +178,9 @@ def parse_h_files(code: str) -> List[str]:
 @T.curry
 def convert_type(typedef_set, info: dict) -> dict:
     info["type"] = info["type"].replace("struct ", "").strip()
+    clean_type = re.sub(r'\b[A-Z0-9_]{2,}\b', '', info["type"]).strip()
+    if clean_type:
+        info["type"] = clean_type
 
     ptr = False
     if info["type"].endswith("*"):
@@ -236,18 +239,28 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
     enum_name = info["name_tail"] or info["name_head"]
     entries = [e.strip() for e in enum_body.split(',')]
 
-    def eval_enum_expr(expr, last_value):
+    def try_eval_enum_expr(expr, last_value):
+        if expr.strip() == "" and last_value:
+            return last_value + 1
+        
         try:
-            if expr.strip() == "":
-                return True, last_value + 1
-            
             allowed_names = {"__builtins__": None}
-            return True, eval(expr, allowed_names, {})
+            return eval(expr, allowed_names, {})
         except Exception as e:
-            return False, expr.strip()
+            try:
+                allowed_names = {"__builtins__": None}
+                expr = re.sub(
+                    r'\b(\d+|0x[0-9a-fA-F]+)(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?|[uU]|[lL]{1,2})\b',
+                    r'\1',
+                    expr.strip()
+                ).strip()
+                return eval(expr, allowed_names, {})
+            except Exception as e:
+                pass
+
+        return None
 
     result = []
-    flag = True
     last_value = -1
 
     for entry in filter(None, entries):
@@ -262,12 +275,14 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
             print(f"Illegal enumeration item name: '{name}'")
             return "", []
 
-        if flag:
-            flag, value = eval_enum_expr(expr.strip(), last_value)
+        value = try_eval_enum_expr(expr.strip(), last_value)
+        if value:
+            result.append((name, value))
+            last_value = value
         else:
             value = expr.strip()
-        result.append((name, value))
-        last_value = value
+            result.append((name, value))
+            last_value = None
 
     return enum_name, result
     
