@@ -276,7 +276,7 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
             return "", []
 
         value = try_eval_enum_expr(expr.strip(), last_value)
-        if value:
+        if value is not None:
             result.append((name, value))
             last_value = value
         else:
