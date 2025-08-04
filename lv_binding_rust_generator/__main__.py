@@ -316,7 +316,7 @@ def generate_rs_file(file: Path) -> str:
             lambda p: p.split("/"),
             T.map(lambda s: s.replace("..", "super")),
             "::".join,
-            lambda p: f"pub use {p}::*;",
+            lambda p: f"pub use super::{p}::*;",
         )),
         '\n'.join,
     )
