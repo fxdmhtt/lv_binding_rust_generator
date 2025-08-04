@@ -1,5 +1,7 @@
 # lv_binding_rust
 
+**This is a highly experimental project and is strongly not recommended for production use.**
+
 This project aims to provide basic Rust bindings for lvgl.
 
 However, unlike the official Rust bindings project, this project makes minimal assumptions. For example, it makes no assumptions about the lvgl version number, and doesn't even care whether the lvgl codebase has been modified.
