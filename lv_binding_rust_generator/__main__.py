@@ -5,8 +5,11 @@ import fire
 import toolz.curried as T
 from pathlib import Path
 from typing import List, Generator
+from functools import wraps
 
 from pprint import pprint
+
+intent = "    "
 
 native_type_map = {
     "char": "c_char",
@@ -33,6 +36,13 @@ native_type_map = {
     "size_t": "usize",
     "void": "c_void",
 }
+
+@T.curry
+def apply(f):
+    @wraps(f)
+    def _(args):
+        return f(*args)
+    return _
 
 line_comment_pattern = re.compile(r'//.*')
 def remove_line_comments(code: str) -> str:
@@ -99,10 +109,12 @@ def remove_ellipsis_lines(code: str) -> str:
 #     return regex.sub(pattern, '', code)
 
 typedef_line_pattern = re.compile(r'^\s*typedef\b.*?;\s*$', re.MULTILINE)
-def extract_typedef_lines(code: str) -> List[str]:
-    return typedef_line_pattern.findall(code)
-def remove_typedef_lines(code: str) -> str:
-    return typedef_line_pattern.sub('', code)
+def extract_and_remove_typedef_lines(code: str) -> tuple[str, List[str]]:
+    return typedef_line_pattern.sub('', code), typedef_line_pattern.findall(code)
+
+enum_block_pattern = re.compile(r'\b(?:typedef\s+)?enum(?:\s+\w+)?\s*{.*?}\s*(?:\w+\s*)?;', re.DOTALL | re.MULTILINE)
+def extract_and_remove_enum_blocks(code: str) -> tuple[str, List[str]]:
+    return enum_block_pattern.sub('', code),  enum_block_pattern.findall(code)
 
 def preproces_code(code: str) -> str:
     code = T.pipe(
@@ -117,10 +129,10 @@ def preproces_code(code: str) -> str:
         remove_ellipsis_lines,
     )
 
-    typedef_lines = extract_typedef_lines(code)
-    code = remove_typedef_lines(code)
+    code, typedef_lines = extract_and_remove_typedef_lines(code)
+    code, enum_blocks = extract_and_remove_enum_blocks(code)
 
-    return code, typedef_lines
+    return code, typedef_lines, enum_blocks
 
 def find_h_files(directory: Path, excluded: List[str]) -> Generator[str, None, None]:
     yield from directory.rglob("*.h")
@@ -187,16 +199,75 @@ def convert_return_type(typedef_set, info: dict) -> str:
     info = convert_type(typedef_set, info)
     
     return f"{info['mut']}{info['type']}"
+
+def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
+    pattern = re.compile(
+        r"""
+        (?:typedef\s+)?             # optional typedef
+        enum
+        (?:\s+(?P<name_head>\w+))?  # optional name before {
+        \s*
+        \{(?P<enum_body>.*?)\}      # enum body (non-greedy)
+        \s*
+        (?P<name_tail>[\w\s,]*)?    # optional tail name(s), e.g., "Status", "X, Y"
+        \s*
+        ;
+        """,
+        re.DOTALL | re.VERBOSE
+    )
+    matches = pattern.match(code)
+    if not matches:
+        return "", []
+
+    info = matches.groupdict()
+    body = info["enum_body"]
+    name = info["name_tail"] or info["name_head"]
+    entries = [e.strip() for e in body.split(',')]
+
+    def eval_enum_expr(expr, last_value):
+        try:
+            if expr.strip() == "":
+                return True, last_value + 1
+            
+            allowed_names = {"__builtins__": None}
+            return True, eval(expr, allowed_names, {})
+        except Exception as e:
+            return False, expr.strip()
+
+    result = []
+    flag = True
+    last_value = -1
+
+    for entry in filter(None, entries):
+        if '=' in entry:
+            name, expr = entry.split('=', 1)
+        else:
+            name, expr = entry, ""
+
+        name = name.strip()
+
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
+            print(f"Illegal enumeration item name: '{name}'")
+            return "", []
+
+        if flag:
+            flag, value = eval_enum_expr(expr.strip(), last_value)
+        else:
+            value = expr.strip()
+        result.append((name, value))
+        last_value = value
+
+    return name, result
     
 def generate_rs_file(file: Path) -> str:
     with open(file, "r") as fd:
-        code, typedef_lines = preproces_code(fd.read())
+        code, typedef_lines, enum_blocks = preproces_code(fd.read())
 
     typedef_set = set()
     _convert_return_type = convert_return_type(typedef_set)
     _convert_params = convert_params(typedef_set)
 
-    content_extern = T.pipe(
+    content_extern_C = T.pipe(
         code,
         parse_h_files,
         T.map(lambda f: {
@@ -205,22 +276,36 @@ def generate_rs_file(file: Path) -> str:
             "type": _convert_return_type(f),
         }),
         T.map(lambda f: f"pub fn {f['name']}({f['params']}) -> {f['type']};"),
-        T.map(lambda l: f"    {l}"),
+        T.map(lambda l: f"{intent}{l}"),
         '\n'.join,
         lambda s: f'extern "C" {{\n{s}\n}}' if s else "",
     )
 
     content_typedef = T.pipe(
         typedef_set,
-        T.map(lambda t: f"#[allow(non_camel_case_types)]\npub type {t} = c_void;"),
+        T.map(lambda t: f"pub type {t} = c_void;"),
         '\n'.join,
+    )
+
+    content_enums = T.pipe(
+        enum_blocks,
+        T.map(convert_enum_block),
+        T.map(apply(lambda name, entry: T.pipe(
+            entry,
+            T.map(apply(lambda e, v: f"{intent}{intent}{e} = {v},")),
+            '\n'.join,
+            lambda body: f"#[repr(C)]\npub enum {name} {{\n{body}\n}}",
+        ))),
+        '\n\n'.join,
     )
 
     content = T.pipe(
         [
+            "#![allow(non_camel_case_types)]",
             "use std::ffi::*;" if content_typedef else "",
             content_typedef,
-            content_extern,
+            content_enums,
+            content_extern_C,
         ],
         '\n\n'.join,
     )
