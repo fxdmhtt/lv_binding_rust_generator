@@ -56,6 +56,10 @@ def remove_block_comments(code: str) -> str:
     # )
     return block_comment_pattern.sub('', code)
 
+lvgl_include_line_pattern = re.compile(r'#include\s+[<"]([^">]*?(?:lvgl|lv_)[^">]*)[>"]')
+def extract_and_remove_lvgl_includes(code: str) -> tuple[str, List[str]]:
+    return lvgl_include_line_pattern.sub('', code), lvgl_include_line_pattern.findall(code)
+
 preprocessor_line_pattern = re.compile(r'^\s*#.*$', re.MULTILINE)
 def remove_preprocessor_lines(code: str) -> str:
     return preprocessor_line_pattern.sub('', code)
@@ -121,6 +125,12 @@ def preproces_code(code: str) -> str:
         code,
         remove_line_comments,
         remove_block_comments,
+    )
+
+    code, lvgl_includes = extract_and_remove_lvgl_includes(code)
+
+    code = T.pipe(
+        code,
         remove_preprocessor_lines,
         remove_empty_lines,
         remove_all_const,
@@ -132,7 +142,7 @@ def preproces_code(code: str) -> str:
     code, typedef_lines = extract_and_remove_typedef_lines(code)
     code, enum_blocks = extract_and_remove_enum_blocks(code)
 
-    return code, typedef_lines, enum_blocks
+    return code, lvgl_includes, typedef_lines, enum_blocks
 
 def find_h_files(directory: Path, excluded: List[str]) -> Generator[str, None, None]:
     yield from directory.rglob("*.h")
@@ -261,7 +271,7 @@ def convert_enum_block(code: str) -> tuple[str, List[tuple[str, int]]]:
     
 def generate_rs_file(file: Path) -> str:
     with open(file, "r") as fd:
-        code, typedef_lines, enum_blocks = preproces_code(fd.read())
+        code, lvgl_includes, typedef_lines, enum_blocks = preproces_code(fd.read())
 
     typedef_set = set()
     _convert_return_type = convert_return_type(typedef_set)
@@ -299,10 +309,23 @@ def generate_rs_file(file: Path) -> str:
         '\n\n'.join,
     )
 
+    content_includes = T.pipe(
+        lvgl_includes,
+        T.map(lambda p: T.pipe(
+            p.removesuffix(".h"),
+            lambda p: p.split("/"),
+            T.map(lambda s: s.replace("..", "super")),
+            "::".join,
+            lambda p: f"pub use {p}::*;",
+        )),
+        '\n'.join,
+    )
+
     content = T.pipe(
         [
             "#![allow(non_camel_case_types)]",
             "use std::ffi::*;" if content_typedef else "",
+            content_includes,
             content_typedef,
             content_enums,
             content_extern_C,
@@ -330,9 +353,6 @@ def generate(lvgl_src_dir: str, output_dir: str = "out", excluded: List[str] = [
         except Exception as e:
             print(f"Error {file}: {e}")
         else:
-            if not content.strip():
-                continue
-            
             outfile = get_rs_file_path(Path(output_dir) / "lvgl", file.relative_to(root))
             outfile.parent.mkdir(parents=True, exist_ok=True)
             with open(outfile, "w") as fd:
