@@ -352,7 +352,7 @@ def generate_rs_file(file: Path) -> str:
     content = T.pipe(
         [
             "#![allow(non_camel_case_types)]",
-            "use std::ffi::*;" if content_typedef else "",
+            "use std::ffi::*;",
             content_includes,
             content_typedef,
             content_enums,
