@@ -189,7 +189,7 @@ def convert_type(typedef_set, info: dict) -> dict:
     ptr = False
     if info["type"].endswith("*"):
         ptr = True
-        info["type"] = info["type"].strip("*").strip()
+        info["type"] = info["type"].replace("*", "").strip()
     elif info["array"] and info["array"].strip():
         ptr = True
 
