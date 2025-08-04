@@ -304,7 +304,7 @@ def generate_rs_file(file: Path) -> str:
             entry,
             T.map(apply(lambda e, v: f"pub const {e}: u32 = {v};")),
             '\n'.join,
-            lambda items: f"pub type {name} = u32;\n\n{items}",
+            lambda items: f"pub type {name} = u32;\n\n{items}" if name else items,
         ))),
         '\n\n'.join,
     )
