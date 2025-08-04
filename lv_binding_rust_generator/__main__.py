@@ -72,6 +72,10 @@ const_pattern = re.compile(r'\bconst\b\s*')
 def remove_all_const(code: str) -> str:
     return const_pattern.sub('', code)
 
+extern_pattern = re.compile(r'\bextern\b\s*')
+def remove_all_extern(code: str) -> str:
+    return extern_pattern.sub('', code)
+
 def flatten_function_signatures(code: str) -> str:
     lines = code.splitlines()
     result = []
@@ -134,6 +138,7 @@ def preproces_code(code: str) -> str:
         remove_preprocessor_lines,
         remove_empty_lines,
         remove_all_const,
+        remove_all_extern,
         flatten_function_signatures,
         remove_static_lines,
         remove_ellipsis_lines,
@@ -165,6 +170,7 @@ def parse_h_files(code: str) -> List[str]:
 
     return T.pipe(
         code.splitlines(),
+        T.filter(lambda s: "&" not in s),
         T.map(function_pattern.match),
         T.filter(bool),
         T.map(lambda m: m.groupdict()),
@@ -179,9 +185,6 @@ def parse_h_files(code: str) -> List[str]:
 def convert_type(typedef_set, info: dict) -> dict:
     info["type"] = info["type"].replace("struct ", "").strip()
     info["type"] = info["type"].replace("enum ", "").strip()
-    clean_type = re.sub(r'\b[A-Z0-9_]{2,}\b', '', info["type"]).strip()
-    if clean_type:
-        info["type"] = clean_type
 
     ptr = False
     if info["type"].endswith("*"):
@@ -189,6 +192,10 @@ def convert_type(typedef_set, info: dict) -> dict:
         info["type"] = info["type"].strip("*").strip()
     elif info["array"] and info["array"].strip():
         ptr = True
+
+    clean_type = re.sub(r'\b[A-Z0-9_]{2,}\b', '', info["type"]).strip()
+    if clean_type:
+        info["type"] = clean_type
 
     if info["type"] in native_type_map:
         info["type"] = f"{native_type_map[info["type"]]}"
