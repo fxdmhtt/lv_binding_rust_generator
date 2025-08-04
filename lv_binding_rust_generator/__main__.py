@@ -177,6 +177,8 @@ def parse_h_files(code: str) -> List[str]:
 
 @T.curry
 def convert_type(typedef_set, info: dict) -> dict:
+    info["type"] = info["type"].replace("struct ", "").strip()
+
     ptr = False
     if info["type"].endswith("*"):
         ptr = True
